@@ -249,7 +249,8 @@ const useAudioPlayer = () => {
       return pauseOffsetRef.current;
   };
 
-  return { 
+  // Memoize the return value to prevent unnecessary re-renders in consumers
+  return useMemo(() => ({ 
     ...state, 
     load, 
     play, 
@@ -257,7 +258,7 @@ const useAudioPlayer = () => {
     stop, 
     seek, 
     getCurrentTime 
-  };
+  }), [state.isPlaying, state.duration, state.isReady, state.currentTime]);
 };
 
 // --- SERVICES ---
@@ -750,7 +751,7 @@ const GeneratingScreen = ({
                </div>
              ) : (
                <>
-                 <div className="absolute inset-0 border-t-2 border-r-2 border-white/20 rounded-full animate-spin"></div>
+                 <div className="absolute inset-0 border-t-2 border-white/20 rounded-full animate-spin"></div>
                  <div className="absolute inset-2 border-b-2 border-l-2 border-teal-500/40 rounded-full animate-spin reverse duration-1000"></div>
                  <Brain size={32} className="text-white/80 animate-pulse" />
                </>
@@ -835,6 +836,13 @@ const PlayerScreen = ({
     }
   }, [audioData, player.isReady]);
 
+  // Auto-play when ready
+  useEffect(() => {
+    if (player.isReady && !player.isPlaying && player.currentTime === 0) {
+      player.play();
+    }
+  }, [player.isReady]);
+
   // Animation Loop for Progress & Lyrics
   useEffect(() => {
     let animId: number;
@@ -887,86 +895,90 @@ const PlayerScreen = ({
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-950 z-50 flex flex-col animate-fade-in max-w-lg mx-auto left-0 right-0">
-      {/* Background Ambience */}
+    <div className="fixed inset-0 bg-slate-950 z-50 flex flex-col animate-fade-in">
+      {/* Background Ambience - Full Screen */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
          <div className="absolute top-[-20%] left-[-20%] w-[150%] h-[150%] bg-indigo-900/10 blur-[100px] animate-pulse"></div>
+         <div className="absolute bottom-[-10%] right-[-10%] w-[100vw] h-[100vw] bg-teal-900/5 blur-[120px]"></div>
       </div>
 
-      {/* Navbar */}
-      <div className="relative z-10 flex items-center justify-between p-6">
-         <button onClick={onBack} className="w-12 h-12 rounded-full bg-white/5 border border-white/10 backdrop-blur-md flex items-center justify-center text-white hover:bg-white/10 transition-colors">
-            <X size={20} />
-         </button>
-         <span className="text-xs font-medium tracking-widest text-slate-500 uppercase">Now Playing</span>
-         <div className="w-12"></div> {/* Spacer */}
-      </div>
+      {/* Content Container - Centered Mobile Width */}
+      <div className="relative z-10 w-full h-full max-w-lg mx-auto flex flex-col">
+          {/* Navbar */}
+          <div className="flex items-center justify-between p-6 absolute top-0 left-0 right-0 z-30 bg-gradient-to-b from-slate-950/80 to-transparent backdrop-blur-sm">
+             <button onClick={onBack} className="w-12 h-12 rounded-full bg-white/5 border border-white/10 backdrop-blur-md flex items-center justify-center text-white hover:bg-white/10 transition-colors">
+                <X size={20} />
+             </button>
+             <span className="text-xs font-medium tracking-widest text-slate-500 uppercase">Now Playing</span>
+             <div className="w-12"></div> {/* Spacer */}
+          </div>
 
-      {/* Lyrics Area */}
-      <div className="flex-1 overflow-y-auto no-scrollbar relative z-10 px-8 py-12 mask-image-gradient">
-         <div ref={lyricsContainerRef} className="space-y-12 py-[40vh]">
-            {lyrics.map((line, i) => {
-               const isActive = i === activeLineIndex;
-               return (
-                  <p 
-                    key={i} 
-                    className={`text-2xl md:text-3xl font-medium text-center transition-all duration-700 leading-normal ${
-                       isActive 
-                         ? 'text-white scale-100 blur-0' 
-                         : 'text-slate-600 scale-95 blur-[2px]'
-                    }`}
-                  >
-                    {line.text}
-                  </p>
-               );
-            })}
-         </div>
-      </div>
+          {/* Lyrics Area */}
+          <div className="flex-1 overflow-y-auto no-scrollbar px-8 mask-image-gradient">
+             <div ref={lyricsContainerRef} className="space-y-12 pt-32 pb-64">
+                {lyrics.map((line, i) => {
+                   const isActive = i === activeLineIndex;
+                   return (
+                      <p 
+                        key={i} 
+                        className={`font-medium text-center transition-all duration-700 leading-normal ${
+                           isActive 
+                             ? 'text-3xl md:text-4xl text-white scale-100 blur-0' 
+                             : 'text-2xl md:text-3xl text-slate-600 scale-95 blur-[2px]'
+                        }`}
+                      >
+                        {line.text}
+                      </p>
+                   );
+                })}
+             </div>
+          </div>
 
-      {/* Floating Controls Island */}
-      <div className="fixed bottom-8 left-6 right-6 z-20 md:absolute md:bottom-12">
-        <div className="bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] p-6 shadow-2xl">
-           
-           {/* Title */}
-           <div className="text-center mb-6">
-              <h3 className="text-white font-medium">{title}</h3>
-              <p className="text-xs text-slate-400 mt-1">Guided Meditation</p>
-           </div>
+          {/* Floating Controls Island */}
+          <div className="fixed bottom-8 left-6 right-6 z-20 md:static md:mb-12 md:mx-6">
+            <div className="bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[2.5rem] p-6 shadow-2xl">
+               
+               {/* Title */}
+               <div className="text-center mb-6">
+                  <h3 className="text-white font-medium">{title}</h3>
+                  <p className="text-xs text-slate-400 mt-1">Guided Meditation</p>
+               </div>
 
-           {/* Progress */}
-           <div 
-             className="h-1.5 bg-white/10 rounded-full mb-6 cursor-pointer relative overflow-hidden group"
-             onClick={handleSeek}
-           >
-              <div ref={progressBarRef} className="absolute top-0 left-0 h-full bg-white rounded-full w-0" />
-           </div>
+               {/* Progress */}
+               <div 
+                 className="h-1.5 bg-white/10 rounded-full mb-6 cursor-pointer relative overflow-hidden group"
+                 onClick={handleSeek}
+               >
+                  <div ref={progressBarRef} className="absolute top-0 left-0 h-full bg-white rounded-full w-0" />
+               </div>
 
-           {/* Controls */}
-           <div className="flex items-center justify-between px-4">
-              <span ref={timeLabelRef} className="text-[10px] font-medium text-slate-500 w-10">0:00</span>
-              
-              <div className="flex items-center gap-6">
-                 <button onClick={() => player.seek(player.getCurrentTime() - 10)} className="text-white/50 hover:text-white transition-colors">
-                    <ChevronLeft size={24} />
-                 </button>
-                 
-                 <button 
-                   onClick={togglePlay}
-                   className="w-16 h-16 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(255,255,255,0.2)]"
-                 >
-                    {player.isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
-                 </button>
+               {/* Controls */}
+               <div className="flex items-center justify-between px-4">
+                  <span ref={timeLabelRef} className="text-[10px] font-medium text-slate-500 w-10">0:00</span>
+                  
+                  <div className="flex items-center gap-6">
+                     <button onClick={() => player.seek(player.getCurrentTime() - 10)} className="text-white/50 hover:text-white transition-colors">
+                        <ChevronLeft size={24} />
+                     </button>
+                     
+                     <button 
+                       onClick={togglePlay}
+                       className="w-16 h-16 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-[0_0_20px_rgba(255,255,255,0.2)]"
+                     >
+                        {player.isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" className="ml-1" />}
+                     </button>
 
-                 <button onClick={() => player.seek(player.getCurrentTime() + 10)} className="text-white/50 hover:text-white transition-colors">
-                    <ChevronRight size={24} />
-                 </button>
-              </div>
-              
-              <span className="text-[10px] font-medium text-slate-500 w-10 text-right">
-                 {Math.floor(player.duration / 60)}:{Math.floor(player.duration % 60).toString().padStart(2, '0')}
-              </span>
-           </div>
-        </div>
+                     <button onClick={() => player.seek(player.getCurrentTime() + 10)} className="text-white/50 hover:text-white transition-colors">
+                        <ChevronRight size={24} />
+                     </button>
+                  </div>
+                  
+                  <span className="text-[10px] font-medium text-slate-500 w-10 text-right">
+                     {Math.floor(player.duration / 60)}:{Math.floor(player.duration % 60).toString().padStart(2, '0')}
+                  </span>
+               </div>
+            </div>
+          </div>
       </div>
     </div>
   );
