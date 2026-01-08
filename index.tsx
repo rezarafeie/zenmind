@@ -33,12 +33,13 @@ import {
   CloudRain,
   Flower,
   Info,
-  Download
+  Download,
+  Settings
 } from 'lucide-react';
 
 // --- CONFIGURATION & TYPES ---
 
-const OPENROUTER_API_KEY = "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";
+const OPENROUTER_API_KEY = ""; // User must provide key via Settings
 const APP_MODEL = "google/gemini-3-flash-preview";
 
 type ViewState = 'onboarding' | 'home' | 'meditate' | 'generating' | 'breathe' | 'journal' | 'player';
@@ -159,6 +160,10 @@ const TRANSLATIONS = {
     background_volume: "Background Volume",
     ai_sound_tooltip: "AI selected this soundscape for you",
     loading_breath_tip: "Take a deep breath while we prepare your session...",
+    settings_title: "API Settings",
+    settings_desc: "Please enter your OpenRouter API Key to generate meditations.",
+    save_restart: "Save & Restart",
+    cancel: "Cancel",
     goals: {
       'Stress Relief': 'Stress Relief',
       'Better Sleep': 'Better Sleep',
@@ -223,6 +228,10 @@ const TRANSLATIONS = {
     background_volume: "صدای پس‌زمینه",
     ai_sound_tooltip: "هوش مصنوعی این صدا را برای شما انتخاب کرد",
     loading_breath_tip: "نفس عمیقی بکشید تا جلسه شما آماده شود...",
+    settings_title: "تنظیمات API",
+    settings_desc: "لطفاً کلید OpenRouter خود را برای تولید مدیتیشن وارد کنید.",
+    save_restart: "ذخیره و شروع مجدد",
+    cancel: "لغو",
     goals: {
       'Stress Relief': 'کاهش استرس',
       'Better Sleep': 'خواب بهتر',
@@ -686,11 +695,23 @@ const useAudioPlayer = () => {
 class AIService {
   private baseUrl = "https://openrouter.ai/api/v1";
 
+  private getApiKey(): string {
+    return localStorage.getItem('zenmind_api_key') || OPENROUTER_API_KEY;
+  }
+
+  hasKey(): boolean {
+    const key = this.getApiKey();
+    return key.length > 0 && key.startsWith('sk-or-');
+  }
+
   private async fetchOpenRouter(endpoint: string, body: any) {
+    const key = this.getApiKey();
+    if (!key) throw new Error("Missing API Key");
+
     const res = await fetch(`${this.baseUrl}${endpoint}`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Authorization": `Bearer ${key}`,
         "Content-Type": "application/json",
         "HTTP-Referer": window.location.href, // Required by OpenRouter
         "X-Title": "ZenMind AI" // Optional
@@ -700,6 +721,12 @@ class AIService {
 
     if (!res.ok) {
        const err = await res.text();
+       try {
+           const errJson = JSON.parse(err);
+           if (errJson.error && errJson.error.code === 401) {
+               throw new Error("Invalid API Key. Please update it in Settings.");
+           }
+       } catch(e) {}
        throw new Error(`OpenRouter API Error: ${err}`);
     }
     return res.json();
@@ -721,8 +748,11 @@ class AIService {
       
       let text = data.choices?.[0]?.message?.content?.trim() || "";
       return text.replace(/"/g, '') || `${getGreeting(lang)}.`;
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      // Only log unexpected errors, silence auth/missing key errors for background greeting
+      if (!e.message.includes('401') && !e.message.includes('Invalid API Key') && !e.message.includes('Missing API Key')) {
+         console.error(e);
+      }
       return `${getGreeting(lang)}.`;
     }
   }
@@ -816,7 +846,7 @@ class AIService {
       const res = await fetch("https://openrouter.ai/api/v1/audio/speech", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+          "Authorization": `Bearer ${this.getApiKey()}`,
           "Content-Type": "application/json",
           "HTTP-Referer": window.location.href,
           "X-Title": "ZenMind AI"
@@ -844,10 +874,6 @@ class AIService {
   }
 
   private createSilentBuffer(): ArrayBuffer {
-      // Create a 1-second silent MP3-like buffer or just standard PCM 
-      // Actually, since we use decodeAudioData in the player, we can return a small WAV
-      // Or just a buffer of zeros that the player will "play" (silence)
-      // For simplicity, we create a very small valid WAV file in memory
       const sampleRate = 44100;
       const numChannels = 1;
       const bitsPerSample = 16;
@@ -911,6 +937,39 @@ const Button = ({ children, variant = 'primary', onClick, disabled, className = 
     <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${sizes[size as keyof typeof sizes]} ${variants[variant as keyof typeof variants]} ${className}`}>
       {children}
     </button>
+  );
+};
+
+const SettingsModal = ({ onClose, lang }: { onClose: () => void, lang: AppLanguage }) => {
+  const [key, setKey] = useState(localStorage.getItem('zenmind_api_key') || '');
+  const t = TRANSLATIONS[lang];
+  
+  const handleSave = () => {
+    localStorage.setItem('zenmind_api_key', key.trim());
+    onClose();
+    window.location.reload(); 
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in p-6">
+      <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-6 w-full max-w-sm shadow-2xl border border-slate-200 dark:border-white/10">
+        <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">{t.settings_title}</h3>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
+          {t.settings_desc}
+        </p>
+        <input 
+          type="password" 
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="sk-or-v1-..."
+          className="w-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm mb-6 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:text-white"
+        />
+        <div className="flex gap-3">
+          <Button variant="ghost" onClick={onClose} size="sm">{t.cancel}</Button>
+          <Button onClick={handleSave} size="sm">{t.save_restart}</Button>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -1040,7 +1099,7 @@ const MiniPlayer = ({ title, player, onClick, lang }: { title: string, player: R
   );
 };
 
-const HomeScreen = ({ onNavigate, greeting, lang }: any) => {
+const HomeScreen = ({ onNavigate, greeting, lang, onOpenSettings }: any) => {
   const t = TRANSLATIONS[lang as AppLanguage];
   
   return (
@@ -1052,6 +1111,12 @@ const HomeScreen = ({ onNavigate, greeting, lang }: any) => {
           {greeting ? greeting : <span className="animate-pulse bg-slate-200 dark:bg-white/10 rounded w-2/3 block h-full">&nbsp;</span>}
         </h1>
       </div>
+      <button 
+         onClick={onOpenSettings}
+         className="w-10 h-10 flex items-center justify-center rounded-full bg-white/50 dark:bg-white/5 hover:bg-white dark:hover:bg-white/10 transition-colors backdrop-blur-md border border-slate-200 dark:border-white/5 text-slate-700 dark:text-white/70"
+      >
+         <Settings size={20} />
+      </button>
     </header>
 
     <div className="grid grid-cols-1 gap-4">
@@ -2058,6 +2123,7 @@ const App = () => {
   const [activeAudio, setActiveAudio] = useState<ArrayBuffer | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [greeting, setGreeting] = useState<string>("");
+  const [showSettings, setShowSettings] = useState(false);
   
   const [genTask, setGenTask] = useState<GenerationTask | null>(null);
   const player = useAudioPlayer();
@@ -2078,6 +2144,13 @@ const App = () => {
     };
     init();
   }, []);
+
+  // Check for API key on mount and prompt user if missing
+  useEffect(() => {
+    if (!gemini.hasKey() && view !== 'onboarding') {
+       setShowSettings(true);
+    }
+  }, [view]);
 
   // Refresh greeting when language changes
   useEffect(() => {
@@ -2139,8 +2212,8 @@ const App = () => {
        
     } catch (e: any) {
        console.error(e);
-       setGenTask(prev => prev ? ({ ...prev, status: 'failed' }) : null);
-       showToast("Failed to create session. Please try again.", 'error');
+       setGenTask(prev => prev ? ({ ...prev, status: 'failed', errorDetail: e.message }) : null);
+       showToast(e.message || "Failed to create session.", 'error');
     }
   };
 
@@ -2188,6 +2261,8 @@ const App = () => {
          <div className="absolute bottom-[-10%] left-[20%] w-[600px] h-[600px] bg-slate-200/50 dark:bg-slate-800/30 rounded-full blur-[120px] animate-blob animation-delay-4000"></div>
       </div>
 
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} lang={lang} />}
+
       {view === 'onboarding' && <div className="flex flex-col items-center justify-center min-h-full p-8 text-center animate-fade-in relative z-10 max-w-lg mx-auto">
         <div className="mb-8 relative"><div className="w-20 h-20 bg-white dark:bg-white/10 rounded-[2rem] backdrop-blur-xl flex items-center justify-center shadow-2xl border border-slate-200 dark:border-white/10 rotate-3"><Wind size={40} className="text-teal-600 dark:text-white" /></div></div>
         <h1 className="text-4xl font-light tracking-tight text-slate-900 dark:text-white mb-4">{t.onboarding_title}</h1>
@@ -2203,6 +2278,7 @@ const App = () => {
           onNavigate={setView} 
           greeting={greeting}
           lang={lang}
+          onOpenSettings={() => setShowSettings(true)}
         />
       )}
 
