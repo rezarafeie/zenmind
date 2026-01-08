@@ -1035,7 +1035,7 @@ const GeneratorScreen = ({ onGenerate, onBack, lang }: any) => {
   }, [lang]);
 
   return (
-    <div className="flex flex-col min-h-full p-6 animate-fade-in max-w-lg mx-auto">
+    <div className="flex flex-col min-h-full p-6 pb-48 animate-fade-in max-w-lg mx-auto">
       <div className="flex items-center gap-4 mb-8 mt-2">
         <button onClick={onBack} className="p-3 bg-white/50 dark:bg-white/5 rounded-full hover:bg-white/80 dark:hover:bg-white/10 backdrop-blur-md transition-colors text-slate-900 dark:text-white">
            {lang === 'fa' ? <ArrowRight size={20} /> : <ArrowLeft size={20} />}
