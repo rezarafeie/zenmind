@@ -1,0 +1,21 @@
+{
+  "name": "ZenMind AI",
+  "short_name": "ZenMind",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://ui-avatars.com/api/?name=ZM&background=0f172a&color=2dd4bf&size=192&rounded=true&bold=true",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://ui-avatars.com/api/?name=ZM&background=0f172a&color=2dd4bf&size=512&rounded=true&bold=true",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
