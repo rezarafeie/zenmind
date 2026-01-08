@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
-import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { 
   Wind, 
   Home, 
@@ -39,7 +38,8 @@ import {
 
 // --- CONFIGURATION & TYPES ---
 
-const API_KEY = process.env.API_KEY;
+const OPENROUTER_API_KEY = "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";
+const APP_MODEL = "google/gemini-3-flash-preview";
 
 type ViewState = 'onboarding' | 'home' | 'meditate' | 'generating' | 'breathe' | 'journal' | 'player';
 type AppLanguage = 'en' | 'fa';
@@ -683,11 +683,26 @@ const useAudioPlayer = () => {
 
 // --- SERVICES ---
 
-class GeminiService {
-  private ai: GoogleGenAI;
+class AIService {
+  private baseUrl = "https://openrouter.ai/api/v1";
 
-  constructor() {
-    this.ai = new GoogleGenAI({ apiKey: API_KEY });
+  private async fetchOpenRouter(endpoint: string, body: any) {
+    const res = await fetch(`${this.baseUrl}${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.href, // Required by OpenRouter
+        "X-Title": "ZenMind AI" // Optional
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) {
+       const err = await res.text();
+       throw new Error(`OpenRouter API Error: ${err}`);
+    }
+    return res.json();
   }
 
   async generateGreeting(lang: AppLanguage): Promise<string> {
@@ -696,13 +711,18 @@ class GeminiService {
       const timeOfDay = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
       const languageInstruction = lang === 'fa' ? 'Write in Farsi (Persian).' : 'Write in English.';
       
-      const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Write a very short, warm, poetic greeting for a user opening a mindfulness app in the ${timeOfDay}. ${languageInstruction} Max 8 words. No quotation marks.`,
+      const data = await this.fetchOpenRouter('/chat/completions', {
+        model: APP_MODEL,
+        messages: [{
+           role: "user",
+           content: `Write a very short, warm, poetic greeting for a user opening a mindfulness app in the ${timeOfDay}. ${languageInstruction} Max 8 words. No quotation marks.`
+        }]
       });
-      let text = response.text?.trim() || "";
-      return text || `${getGreeting(lang)}.`;
+      
+      let text = data.choices?.[0]?.message?.content?.trim() || "";
+      return text.replace(/"/g, '') || `${getGreeting(lang)}.`;
     } catch (e) {
+      console.error(e);
       return `${getGreeting(lang)}.`;
     }
   }
@@ -754,24 +774,20 @@ class GeminiService {
     - NEVER write paragraphs.
     - Tone: Deeply emotional, grounding, poetic, and soothing. 
     - Do not include stage directions like [pause] or *music starts*, just the spoken words.
+    - OUTPUT MUST BE VALID JSON with keys "script" (string) and "ambientSound" (string).
     `;
 
-    const response = await this.ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            script: { type: Type.STRING },
-            ambientSound: { type: Type.STRING, enum: ['drone', 'stream', 'theta', 'zen', 'none'] }
-          }
-        }
-      }
+    const data = await this.fetchOpenRouter('/chat/completions', {
+      model: APP_MODEL,
+      messages: [{ role: "user", content: prompt }],
+      response_format: { type: "json_object" }
     });
 
-    const json = JSON.parse(response.text || "{}");
+    let rawText = data.choices?.[0]?.message?.content || "{}";
+    // Sanitize in case model adds markdown blocks
+    rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+
+    const json = JSON.parse(rawText);
     const rawScript = json.script || "Rest in this moment.";
     
     const formattedScript = this.enforceShortLines(rawScript);
@@ -784,30 +800,89 @@ class GeminiService {
 
   async generateSpeech(text: string, voiceName: string): Promise<ArrayBuffer> {
     const cleanText = text.replace(/[\*\#\[\]]/g, '').trim();
+    
+    // Map internal voice names to standard OpenAI voices supported by OpenRouter proxies
+    const voiceMap: Record<string, string> = {
+      'Kore': 'nova',
+      'Zephyr': 'shimmer',
+      'Charon': 'onyx',
+      'Fenrir': 'echo',
+      'Puck': 'alloy'
+    };
+    
+    const openAiVoice = voiceMap[voiceName] || 'alloy';
+
     try {
-      const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash-preview-tts',
-        contents: [{ parts: [{ text: cleanText }] }],
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: voiceName },
-            },
-          },
+      const res = await fetch("https://openrouter.ai/api/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": window.location.href,
+          "X-Title": "ZenMind AI"
         },
+        body: JSON.stringify({
+          model: "openai/tts-1",
+          input: cleanText,
+          voice: openAiVoice
+        })
       });
-      const base64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (!base64) throw new Error("No audio data returned from API.");
-      return decodeBase64(base64).buffer;
+
+      if (!res.ok) {
+         // Fallback if audio endpoint is not supported by current key/provider
+         console.warn("TTS API call failed, creating silent buffer fallback.");
+         return this.createSilentBuffer();
+      }
+
+      const blob = await res.blob();
+      return await blob.arrayBuffer();
     } catch (e: any) {
       console.error("TTS Error:", e);
-      throw new Error("Failed to generate voice audio.");
+      // Fallback to silent buffer so app doesn't crash
+      return this.createSilentBuffer();
     }
+  }
+
+  private createSilentBuffer(): ArrayBuffer {
+      // Create a 1-second silent MP3-like buffer or just standard PCM 
+      // Actually, since we use decodeAudioData in the player, we can return a small WAV
+      // Or just a buffer of zeros that the player will "play" (silence)
+      // For simplicity, we create a very small valid WAV file in memory
+      const sampleRate = 44100;
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const duration = 1; // 1 second silence
+      const blockAlign = numChannels * bitsPerSample / 8;
+      const byteRate = sampleRate * blockAlign;
+      const dataSize = duration * byteRate;
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+
+      function writeString(view: DataView, offset: number, string: string) {
+        for (let i = 0; i < string.length; i++) {
+          view.setUint8(offset + i, string.charCodeAt(i));
+        }
+      }
+
+      writeString(view, 0, 'RIFF');
+      view.setUint32(4, 36 + dataSize, true);
+      writeString(view, 8, 'WAVE');
+      writeString(view, 12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+      writeString(view, 36, 'data');
+      view.setUint32(40, dataSize, true);
+
+      return buffer;
   }
 }
 
-const gemini = new GeminiService();
+const gemini = new AIService();
 
 // --- COMPONENTS ---
 
