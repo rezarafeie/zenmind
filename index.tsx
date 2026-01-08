@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
+import { GoogleGenAI, Modality, Type } from "@google/genai";
 import { 
   Wind, 
   Home, 
@@ -33,14 +34,12 @@ import {
   CloudRain,
   Flower,
   Info,
-  Download,
-  Settings
+  Download
 } from 'lucide-react';
 
 // --- CONFIGURATION & TYPES ---
 
-const OPENROUTER_API_KEY = ""; // User must provide key via Settings
-const APP_MODEL = "google/gemini-3-flash-preview";
+const API_KEY = process.env.API_KEY;
 
 type ViewState = 'onboarding' | 'home' | 'meditate' | 'generating' | 'breathe' | 'journal' | 'player';
 type AppLanguage = 'en' | 'fa';
@@ -160,10 +159,6 @@ const TRANSLATIONS = {
     background_volume: "Background Volume",
     ai_sound_tooltip: "AI selected this soundscape for you",
     loading_breath_tip: "Take a deep breath while we prepare your session...",
-    settings_title: "API Settings",
-    settings_desc: "Please enter your OpenRouter API Key to generate meditations.",
-    save_restart: "Save & Restart",
-    cancel: "Cancel",
     goals: {
       'Stress Relief': 'Stress Relief',
       'Better Sleep': 'Better Sleep',
@@ -228,10 +223,6 @@ const TRANSLATIONS = {
     background_volume: "صدای پس‌زمینه",
     ai_sound_tooltip: "هوش مصنوعی این صدا را برای شما انتخاب کرد",
     loading_breath_tip: "نفس عمیقی بکشید تا جلسه شما آماده شود...",
-    settings_title: "تنظیمات API",
-    settings_desc: "لطفاً کلید OpenRouter خود را برای تولید مدیتیشن وارد کنید.",
-    save_restart: "ذخیره و شروع مجدد",
-    cancel: "لغو",
     goals: {
       'Stress Relief': 'کاهش استرس',
       'Better Sleep': 'خواب بهتر',
@@ -692,44 +683,11 @@ const useAudioPlayer = () => {
 
 // --- SERVICES ---
 
-class AIService {
-  private baseUrl = "https://openrouter.ai/api/v1";
+class GeminiService {
+  private ai: GoogleGenAI;
 
-  private getApiKey(): string {
-    return localStorage.getItem('zenmind_api_key') || OPENROUTER_API_KEY;
-  }
-
-  hasKey(): boolean {
-    const key = this.getApiKey();
-    return key.length > 0 && key.startsWith('sk-or-');
-  }
-
-  private async fetchOpenRouter(endpoint: string, body: any) {
-    const key = this.getApiKey();
-    if (!key) throw new Error("Missing API Key");
-
-    const res = await fetch(`${this.baseUrl}${endpoint}`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${key}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": window.location.href, // Required by OpenRouter
-        "X-Title": "ZenMind AI" // Optional
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!res.ok) {
-       const err = await res.text();
-       try {
-           const errJson = JSON.parse(err);
-           if (errJson.error && errJson.error.code === 401) {
-               throw new Error("Invalid API Key. Please update it in Settings.");
-           }
-       } catch(e) {}
-       throw new Error(`OpenRouter API Error: ${err}`);
-    }
-    return res.json();
+  constructor() {
+    this.ai = new GoogleGenAI({ apiKey: API_KEY });
   }
 
   async generateGreeting(lang: AppLanguage): Promise<string> {
@@ -738,21 +696,13 @@ class AIService {
       const timeOfDay = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
       const languageInstruction = lang === 'fa' ? 'Write in Farsi (Persian).' : 'Write in English.';
       
-      const data = await this.fetchOpenRouter('/chat/completions', {
-        model: APP_MODEL,
-        messages: [{
-           role: "user",
-           content: `Write a very short, warm, poetic greeting for a user opening a mindfulness app in the ${timeOfDay}. ${languageInstruction} Max 8 words. No quotation marks.`
-        }]
+      const response = await this.ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `Write a very short, warm, poetic greeting for a user opening a mindfulness app in the ${timeOfDay}. ${languageInstruction} Max 8 words. No quotation marks.`,
       });
-      
-      let text = data.choices?.[0]?.message?.content?.trim() || "";
-      return text.replace(/"/g, '') || `${getGreeting(lang)}.`;
-    } catch (e: any) {
-      // Only log unexpected errors, silence auth/missing key errors for background greeting
-      if (!e.message.includes('401') && !e.message.includes('Invalid API Key') && !e.message.includes('Missing API Key')) {
-         console.error(e);
-      }
+      let text = response.text?.trim() || "";
+      return text || `${getGreeting(lang)}.`;
+    } catch (e) {
       return `${getGreeting(lang)}.`;
     }
   }
@@ -804,20 +754,24 @@ class AIService {
     - NEVER write paragraphs.
     - Tone: Deeply emotional, grounding, poetic, and soothing. 
     - Do not include stage directions like [pause] or *music starts*, just the spoken words.
-    - OUTPUT MUST BE VALID JSON with keys "script" (string) and "ambientSound" (string).
     `;
 
-    const data = await this.fetchOpenRouter('/chat/completions', {
-      model: APP_MODEL,
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" }
+    const response = await this.ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            script: { type: Type.STRING },
+            ambientSound: { type: Type.STRING, enum: ['drone', 'stream', 'theta', 'zen', 'none'] }
+          }
+        }
+      }
     });
 
-    let rawText = data.choices?.[0]?.message?.content || "{}";
-    // Sanitize in case model adds markdown blocks
-    rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-
-    const json = JSON.parse(rawText);
+    const json = JSON.parse(response.text || "{}");
     const rawScript = json.script || "Rest in this moment.";
     
     const formattedScript = this.enforceShortLines(rawScript);
@@ -830,85 +784,30 @@ class AIService {
 
   async generateSpeech(text: string, voiceName: string): Promise<ArrayBuffer> {
     const cleanText = text.replace(/[\*\#\[\]]/g, '').trim();
-    
-    // Map internal voice names to standard OpenAI voices supported by OpenRouter proxies
-    const voiceMap: Record<string, string> = {
-      'Kore': 'nova',
-      'Zephyr': 'shimmer',
-      'Charon': 'onyx',
-      'Fenrir': 'echo',
-      'Puck': 'alloy'
-    };
-    
-    const openAiVoice = voiceMap[voiceName] || 'alloy';
-
     try {
-      const res = await fetch("https://openrouter.ai/api/v1/audio/speech", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${this.getApiKey()}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": window.location.href,
-          "X-Title": "ZenMind AI"
+      const response = await this.ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-tts',
+        contents: [{ parts: [{ text: cleanText }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: voiceName },
+            },
+          },
         },
-        body: JSON.stringify({
-          model: "openai/tts-1",
-          input: cleanText,
-          voice: openAiVoice
-        })
       });
-
-      if (!res.ok) {
-         // Fallback if audio endpoint is not supported by current key/provider
-         console.warn("TTS API call failed, creating silent buffer fallback.");
-         return this.createSilentBuffer();
-      }
-
-      const blob = await res.blob();
-      return await blob.arrayBuffer();
+      const base64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!base64) throw new Error("No audio data returned from API.");
+      return decodeBase64(base64).buffer;
     } catch (e: any) {
       console.error("TTS Error:", e);
-      // Fallback to silent buffer so app doesn't crash
-      return this.createSilentBuffer();
+      throw new Error("Failed to generate voice audio.");
     }
-  }
-
-  private createSilentBuffer(): ArrayBuffer {
-      const sampleRate = 44100;
-      const numChannels = 1;
-      const bitsPerSample = 16;
-      const duration = 1; // 1 second silence
-      const blockAlign = numChannels * bitsPerSample / 8;
-      const byteRate = sampleRate * blockAlign;
-      const dataSize = duration * byteRate;
-      const buffer = new ArrayBuffer(44 + dataSize);
-      const view = new DataView(buffer);
-
-      function writeString(view: DataView, offset: number, string: string) {
-        for (let i = 0; i < string.length; i++) {
-          view.setUint8(offset + i, string.charCodeAt(i));
-        }
-      }
-
-      writeString(view, 0, 'RIFF');
-      view.setUint32(4, 36 + dataSize, true);
-      writeString(view, 8, 'WAVE');
-      writeString(view, 12, 'fmt ');
-      view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true);
-      view.setUint16(22, numChannels, true);
-      view.setUint32(24, sampleRate, true);
-      view.setUint32(28, byteRate, true);
-      view.setUint16(32, blockAlign, true);
-      view.setUint16(34, bitsPerSample, true);
-      writeString(view, 36, 'data');
-      view.setUint32(40, dataSize, true);
-
-      return buffer;
   }
 }
 
-const gemini = new AIService();
+const gemini = new GeminiService();
 
 // --- COMPONENTS ---
 
@@ -937,39 +836,6 @@ const Button = ({ children, variant = 'primary', onClick, disabled, className = 
     <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${sizes[size as keyof typeof sizes]} ${variants[variant as keyof typeof variants]} ${className}`}>
       {children}
     </button>
-  );
-};
-
-const SettingsModal = ({ onClose, lang }: { onClose: () => void, lang: AppLanguage }) => {
-  const [key, setKey] = useState(localStorage.getItem('zenmind_api_key') || '');
-  const t = TRANSLATIONS[lang];
-  
-  const handleSave = () => {
-    localStorage.setItem('zenmind_api_key', key.trim());
-    onClose();
-    window.location.reload(); 
-  };
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in p-6">
-      <div className="bg-white dark:bg-slate-900 rounded-[2rem] p-6 w-full max-w-sm shadow-2xl border border-slate-200 dark:border-white/10">
-        <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">{t.settings_title}</h3>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">
-          {t.settings_desc}
-        </p>
-        <input 
-          type="password" 
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder="sk-or-v1-..."
-          className="w-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm mb-6 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:text-white"
-        />
-        <div className="flex gap-3">
-          <Button variant="ghost" onClick={onClose} size="sm">{t.cancel}</Button>
-          <Button onClick={handleSave} size="sm">{t.save_restart}</Button>
-        </div>
-      </div>
-    </div>
   );
 };
 
@@ -1099,7 +965,7 @@ const MiniPlayer = ({ title, player, onClick, lang }: { title: string, player: R
   );
 };
 
-const HomeScreen = ({ onNavigate, greeting, lang, onOpenSettings }: any) => {
+const HomeScreen = ({ onNavigate, greeting, lang }: any) => {
   const t = TRANSLATIONS[lang as AppLanguage];
   
   return (
@@ -1111,12 +977,6 @@ const HomeScreen = ({ onNavigate, greeting, lang, onOpenSettings }: any) => {
           {greeting ? greeting : <span className="animate-pulse bg-slate-200 dark:bg-white/10 rounded w-2/3 block h-full">&nbsp;</span>}
         </h1>
       </div>
-      <button 
-         onClick={onOpenSettings}
-         className="w-10 h-10 flex items-center justify-center rounded-full bg-white/50 dark:bg-white/5 hover:bg-white dark:hover:bg-white/10 transition-colors backdrop-blur-md border border-slate-200 dark:border-white/5 text-slate-700 dark:text-white/70"
-      >
-         <Settings size={20} />
-      </button>
     </header>
 
     <div className="grid grid-cols-1 gap-4">
@@ -2123,7 +1983,6 @@ const App = () => {
   const [activeAudio, setActiveAudio] = useState<ArrayBuffer | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [greeting, setGreeting] = useState<string>("");
-  const [showSettings, setShowSettings] = useState(false);
   
   const [genTask, setGenTask] = useState<GenerationTask | null>(null);
   const player = useAudioPlayer();
@@ -2144,13 +2003,6 @@ const App = () => {
     };
     init();
   }, []);
-
-  // Check for API key on mount and prompt user if missing
-  useEffect(() => {
-    if (!gemini.hasKey() && view !== 'onboarding') {
-       setShowSettings(true);
-    }
-  }, [view]);
 
   // Refresh greeting when language changes
   useEffect(() => {
@@ -2212,8 +2064,8 @@ const App = () => {
        
     } catch (e: any) {
        console.error(e);
-       setGenTask(prev => prev ? ({ ...prev, status: 'failed', errorDetail: e.message }) : null);
-       showToast(e.message || "Failed to create session.", 'error');
+       setGenTask(prev => prev ? ({ ...prev, status: 'failed' }) : null);
+       showToast("Failed to create session. Please try again.", 'error');
     }
   };
 
@@ -2261,8 +2113,6 @@ const App = () => {
          <div className="absolute bottom-[-10%] left-[20%] w-[600px] h-[600px] bg-slate-200/50 dark:bg-slate-800/30 rounded-full blur-[120px] animate-blob animation-delay-4000"></div>
       </div>
 
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} lang={lang} />}
-
       {view === 'onboarding' && <div className="flex flex-col items-center justify-center min-h-full p-8 text-center animate-fade-in relative z-10 max-w-lg mx-auto">
         <div className="mb-8 relative"><div className="w-20 h-20 bg-white dark:bg-white/10 rounded-[2rem] backdrop-blur-xl flex items-center justify-center shadow-2xl border border-slate-200 dark:border-white/10 rotate-3"><Wind size={40} className="text-teal-600 dark:text-white" /></div></div>
         <h1 className="text-4xl font-light tracking-tight text-slate-900 dark:text-white mb-4">{t.onboarding_title}</h1>
@@ -2278,7 +2128,6 @@ const App = () => {
           onNavigate={setView} 
           greeting={greeting}
           lang={lang}
-          onOpenSettings={() => setShowSettings(true)}
         />
       )}
 
